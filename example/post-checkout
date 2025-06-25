@@ -6,6 +6,10 @@ prev_commit=$1
 current_commit=$2
 branch_flag=$3
 
-if [[ $branch_flag -eq 1 ]] && git diff --name-only $prev_commit $current_commit | grep -qE "^environ\.hash$"; then
+if [[ -z "${MANUAL_ENVIRON:-}" ]] && \
+    command -v environ >/dev/null 2>&1 && \
+    [[ $branch_flag -eq 1 ]] && \
+    git diff --name-only $prev_commit $current_commit | grep -qE "^environ\.hash$"
+then
     environ pull
 fi
