@@ -399,6 +399,22 @@ func usage() {
 }
 
 func main() {
+	// Find the parent directory of `environ.star` in the ancestor directories of the current working directory
+	dir, err := os.Getwd()
+	if err != nil {
+		log.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "environ.star")); err == nil {
+			break
+		}
+		dir = filepath.Dir(dir)
+		if dir == "/" {
+			log.Fatal("environ.star not found")
+		}
+	}
+	os.Chdir(dir)
+
 	thread := starlark.Thread{
 		Name: "environ",
 	}
@@ -410,7 +426,7 @@ func main() {
 		"environ": starlark.NewBuiltin("environ", environ),
 	}
 
-	_, err := starlark.ExecFileOptions(&opts, &thread, "environ.star", nil, globals)
+	_, err = starlark.ExecFileOptions(&opts, &thread, "environ.star", nil, globals)
 	if err != nil {
 		log.Fatal(err)
 	}
