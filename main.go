@@ -289,11 +289,6 @@ func diff(environ Environ) error {
 		return fmt.Errorf("failed to download ZIP %s: %w", ref, err)
 	}
 
-	zipFiles := make(map[string]bool)
-	for _, file := range environ.Files {
-		zipFiles[file] = true
-	}
-
 	localFiles := make(map[string]bool)
 	for _, file := range environ.Files {
 		localFiles[file] = true
@@ -310,7 +305,9 @@ func diff(environ Environ) error {
 		return fmt.Errorf("failed to read ZIP: %w", err)
 	}
 
+	zipFiles := make(map[string]bool)
 	for _, file := range zipReader.File {
+		zipFiles[file.Name] = true
 		if !localFiles[file.Name] {
 			fmt.Printf("!!! file %s in remote but not working directory\n", file.Name)
 		}
@@ -318,7 +315,8 @@ func diff(environ Environ) error {
 
 	for _, file := range environ.Files {
 		if !zipFiles[file] {
-			fmt.Printf("!!! file %s in working directory but not remote", file)
+			fmt.Printf("!!! file %s in working directory but not remote\n", file)
+			continue
 		}
 		zipFile, err := zipReader.Open(file)
 		if err != nil {
