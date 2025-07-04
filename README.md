@@ -25,3 +25,7 @@ The reference file is ready to be committed.
 ### `environ diff`
 
 Reads the secrets from the working directory, the secrets from the remote based on the current reference, and outputs the difference.
+
+# Similar projects
+
+* [Keepass-2-file](https://github.com/Dracks/keepass-2-file): Build .env or any other plain text config file pulling the secrets from a keepass file
