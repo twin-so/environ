@@ -4,9 +4,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.starlark.net/starlark"
 )
+
+func local(thread *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	path := ""
+	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "path", &path); err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(path, "~/") {
+		path = filepath.Join(os.Getenv("HOME"), path[2:])
+	}
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create directory %s: %w", path, err)
+	}
+	return Local{
+		path: path,
+	}, nil
+}
 
 type Local struct {
 	path string

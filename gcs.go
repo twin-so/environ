@@ -10,6 +10,26 @@ import (
 	"go.starlark.net/starlark"
 )
 
+func gcsfunc(thread *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	bucket := ""
+	prefix := ""
+	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "bucket", &bucket, "prefix?", &prefix); err != nil {
+		return nil, err
+	}
+	if prefix == "" {
+		prefix = "environ"
+	}
+	client, err := storage.NewClient(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	return GCS{
+		client: client,
+		bucket: bucket,
+		prefix: prefix,
+	}, nil
+}
+
 type GCS struct {
 	client *storage.Client
 	bucket string

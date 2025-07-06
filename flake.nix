@@ -15,9 +15,9 @@
           };
           packages.default = pkgs.buildGoModule {
             pname = "environ";
-            version = "0.1.0";
+            version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-7CsvNC6Fr8z4Rz5pULFscQU84T7hF84V1nJEKIYa7y8=";
+            vendorHash = "sha256-wYJJEPwIFoWr+v9JqUgKZe+UxH1tVU0LQkBkdRw5iBM=";
           };
         }
     );
