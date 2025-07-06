@@ -2,9 +2,9 @@
 
 ## Design principles
 
-- Secrets are stored in Google Cloud Storage as content-addressed ZIP files.
+- Secrets are stored in Google Cloud Storage and/or Amazon S3 as content-addressed ZIP files.
 - A reference to the secrets corresponding to a given commit is stored in that commit.
-- Configuration is done in [Starlark](https://starlark-lang.org/). See [how we use it](example/environ.star).
+- Configuration is done in [Starlark](https://starlark-lang.org/). See [how we use it as of 2025-07-06](example/environ.star) and [test cases](tests/environ.star).
 
 ## Execution
 

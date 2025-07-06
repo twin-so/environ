@@ -6,6 +6,17 @@ import (
 	"go.starlark.net/starlark"
 )
 
+func cache(thread *starlark.Thread, fn *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var of, by Remote
+	if err := starlark.UnpackArgs(fn.Name(), args, kwargs, "of", &of, "by", &by); err != nil {
+		return nil, err
+	}
+	return Cache{
+		Of: of,
+		By: by,
+	}, nil
+}
+
 type Cache struct {
 	By Remote
 	Of Remote
