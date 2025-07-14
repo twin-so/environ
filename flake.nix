@@ -17,7 +17,7 @@
             pname = "environ";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-wYJJEPwIFoWr+v9JqUgKZe+UxH1tVU0LQkBkdRw5iBM=";
+            vendorHash = "sha256-CWAkfjgO8wmXfTPpwqBGcW2HEX62vOUfE+UCuzkZmbg=";
           };
         }
     );
