@@ -10,22 +10,22 @@
 
 Finds `environ.star` in ancestors of the working directory and executes there.
 
-### `environ pull`
+### `environ pull [environ…]`
 
-Reads the secrets reference, pulls the secrets from the remote, and installs them in the working directory.
+Reads the secrets reference(s), pulls the secrets from the remote(s), and installs them in the working directory.
 
 Designed to run in [a `post-checkout` Git hook](example/post-checkout) or invoked manually.
 
-### `environ push`
+### `environ push [environ…]`
 
-Reads the secrets from the working directory, writes an archive to the remote, and updates the reference.
+Reads the secrets from the working directory, writes an archive to each environ's remote, and updates its reference file.
 
-The reference file is ready to be committed.
+The reference files are ready to be committed.
 
-### `environ diff`
+### `environ diff [-from …] [-to …] [environ…]`
 
-Reads the secrets from the working directory, the secrets from the remote based on the current reference, and outputs the difference.
+Reads the secrets from the working directory unless `-to` specifies otherwise, the secrets from the remote based on the current reference unless `-from` specifies otherwise, and outputs the difference.
 
 # Similar projects
 
-* [Keepass-2-file](https://github.com/Dracks/keepass-2-file): Build .env or any other plain text config file pulling the secrets from a keepass file
+- [Keepass-2-file](https://github.com/Dracks/keepass-2-file): Build .env or any other plain text config file pulling the secrets from a keepass file
