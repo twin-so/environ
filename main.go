@@ -6,16 +6,23 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/peter-evans/patience"
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
+)
+
+const (
+	// SHA256 produces 32-byte hashes
+	sha256HashSize = 32
 )
 
 type EnvNotFound struct {
@@ -191,119 +198,197 @@ func pull(environ Environ) error {
 	return nil
 }
 
+// generateArchiveID creates a base64 URL-encoded SHA256 hash of the data
+func generateArchiveID(data []byte) string {
+	hash := sha256.Sum256(data)
+	return base64.RawURLEncoding.EncodeToString(hash[:])
+}
+
 func push(environ Environ) error {
+	// Create ZIP from local files
+	zipData, err := getLocalZipData(environ)
+	if err != nil {
+		return err
+	}
+
+	archiveID := generateArchiveID(zipData)
+
+	// Check if already up to date
+	if currentRef, err := os.ReadFile(environ.Ref); err == nil && string(currentRef) == archiveID {
+		log.Printf("Already up to date: %s", archiveID)
+		return nil
+	}
+
+	// Upload to remote
+	if err := environ.Remote.Write(archiveID, zipData); err != nil {
+		return fmt.Errorf("failed to upload archive: %w", err)
+	}
+
+	// Update ref file
+	if err := os.WriteFile(environ.Ref, []byte(archiveID), 0644); err != nil {
+		return fmt.Errorf("failed to update ref file %q: %w", environ.Ref, err)
+	}
+
+	log.Printf("Pushed %d files to %s as %s", len(environ.Files), environ.String(), archiveID)
+	return nil
+}
+
+// isArchiveID checks if a string is a valid archive ID (base64 URL-encoded SHA256)
+func isArchiveID(s string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(s)
+	return err == nil && len(decoded) == sha256HashSize
+}
+
+// readRefFile reads and validates a ref file
+func readRefFile(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("failed to read ref file %s: %w", path, err)
+	}
+	ref := strings.TrimSpace(string(content))
+	if ref == "" {
+		return "", fmt.Errorf("ref file %s is empty", path)
+	}
+	return ref, nil
+}
+
+// getZipFromSource retrieves ZIP data from either an archive ID or a ref file
+// Returns the ZIP data and the resolved archive ID
+func getZipFromSource(environ Environ, source string) ([]byte, string, error) {
+	var archiveID string
+
+	if isArchiveID(source) {
+		archiveID = source
+	} else {
+		// Treat as ref file
+		ref, err := readRefFile(source)
+		if err != nil {
+			return nil, "", err
+		}
+		archiveID = ref
+	}
+
+	zipData, err := environ.Remote.Get(archiveID)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to download archive %s: %w", archiveID, err)
+	}
+	return zipData, archiveID, nil
+}
+
+// getLocalZipData creates a ZIP archive from files in the current directory
+func getLocalZipData(environ Environ) ([]byte, error) {
 	var buf bytes.Buffer
 	zipWriter := zip.NewWriter(&buf)
 
 	for _, file := range environ.Files {
-		if _, err := os.Stat(file); os.IsNotExist(err) {
-			return fmt.Errorf("file %s does not exist", file)
+		fileContent, err := os.ReadFile(file)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("tracked file %q not found in current directory", file)
+			}
+			return nil, fmt.Errorf("failed to read %q: %w", file, err)
 		}
 
-		zipFile, err := zipWriter.Create(file)
+		fileWriter, err := zipWriter.Create(file)
 		if err != nil {
-			return fmt.Errorf("failed to create ZIP entry for %s: %w", file, err)
+			return nil, fmt.Errorf("failed to create ZIP entry for %q: %w", file, err)
 		}
 
-		content, err := os.ReadFile(file)
-		if err != nil {
-			return fmt.Errorf("failed to read file %s: %w", file, err)
-		}
-
-		_, err = zipFile.Write(content)
-		if err != nil {
-			return fmt.Errorf("failed to write file %s to ZIP: %w", file, err)
+		if _, err := fileWriter.Write(fileContent); err != nil {
+			return nil, fmt.Errorf("failed to write %q to ZIP: %w", file, err)
 		}
 	}
 
 	if err := zipWriter.Close(); err != nil {
-		return fmt.Errorf("failed to close ZIP: %w", err)
+		return nil, fmt.Errorf("failed to finalize ZIP: %w", err)
 	}
 
-	bytes := buf.Bytes()
-	hash := sha256.Sum256(bytes)
-	key := base64.RawURLEncoding.EncodeToString(hash[:])
-
-	if currentRef, err := os.ReadFile(environ.Ref); err == nil && string(currentRef) == key {
-		return nil
-	}
-
-	if err := environ.Remote.Write(key, bytes); err != nil {
-		return fmt.Errorf("failed to upload ZIP: %w", err)
-	}
-
-	err := os.WriteFile(environ.Ref, []byte(key), 0644)
-	if err != nil {
-		return fmt.Errorf("failed to update ref file: %w", err)
-	}
-
-	log.Printf("Pushed %d files to %s as %s", len(environ.Files), environ.String(), key)
-	return nil
+	return buf.Bytes(), nil
 }
 
-func diff(environ Environ) error {
-	refContent, err := os.ReadFile(environ.Ref)
+func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) error {
+	// Create ZIP readers
+	fromZipReader, err := zip.NewReader(bytes.NewReader(fromZipData), int64(len(fromZipData)))
 	if err != nil {
-		return fmt.Errorf("failed to read ref file %s: %w", environ.Ref, err)
+		return fmt.Errorf("failed to read 'from' ZIP: %w", err)
 	}
-	ref := strings.TrimSpace(string(refContent))
 
-	zipData, err := environ.Remote.Get(ref)
+	toZipReader, err := zip.NewReader(bytes.NewReader(toZipData), int64(len(toZipData)))
 	if err != nil {
-		return fmt.Errorf("failed to download ZIP %s: %w", ref, err)
+		return fmt.Errorf("failed to read 'to' ZIP: %w", err)
 	}
 
-	localFiles := make(map[string]bool)
-	for _, file := range environ.Files {
-		localFiles[file] = true
+	// Build file maps
+	fromFiles := make(map[string]*zip.File)
+	for _, file := range fromZipReader.File {
+		fromFiles[file.Name] = file
 	}
 
-	for _, file := range environ.Files {
-		if _, err := os.Stat(file); os.IsNotExist(err) {
-			return fmt.Errorf("file %s does not exist", file)
-		}
+	toFiles := make(map[string]*zip.File)
+	for _, file := range toZipReader.File {
+		toFiles[file.Name] = file
 	}
 
-	zipReader, err := zip.NewReader(bytes.NewReader([]byte(zipData)), int64(len(zipData)))
-	if err != nil {
-		return fmt.Errorf("failed to read ZIP: %w", err)
+	// Check all files
+	allFiles := make(map[string]bool)
+	for name := range fromFiles {
+		allFiles[name] = true
+	}
+	for name := range toFiles {
+		allFiles[name] = true
 	}
 
-	zipFiles := make(map[string]bool)
-	for _, file := range zipReader.File {
-		zipFiles[file.Name] = true
-		if !localFiles[file.Name] {
-			fmt.Printf("!!! file %s in remote but not working directory\n", file.Name)
-		}
+	// Sort files for consistent output
+	var fileList []string
+	for file := range allFiles {
+		fileList = append(fileList, file)
 	}
+	sort.Strings(fileList)
 
-	for _, file := range environ.Files {
-		if !zipFiles[file] {
-			fmt.Printf("!!! file %s in working directory but not remote\n", file)
+	// Diff each file
+	for _, fileName := range fileList {
+		fromFile, fromExists := fromFiles[fileName]
+		toFile, toExists := toFiles[fileName]
+
+		if !fromExists && toExists {
+			fmt.Printf("!!! file %s only in %s\n", fileName, toLabel)
 			continue
 		}
-		zipFile, err := zipReader.Open(file)
-		if err != nil {
-			return fmt.Errorf("failed to open file %s in ZIP: %w", file, err)
+		if fromExists && !toExists {
+			fmt.Printf("!!! file %s only in %s\n", fileName, fromLabel)
+			continue
 		}
-		zipFileContent, err := io.ReadAll(zipFile)
+
+		// Both exist, compare contents
+		fromReader, err := fromFile.Open()
 		if err != nil {
-			return fmt.Errorf("failed to read file %s in ZIP: %w", file, err)
+			return fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, fromLabel, err)
 		}
-		zipFile.Close()
-		localFileContent, err := os.ReadFile(file)
+		fromContent, err := io.ReadAll(fromReader)
+		fromReader.Close()
 		if err != nil {
-			return fmt.Errorf("failed to read file %s in working directory: %w", file, err)
+			return fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, fromLabel, err)
 		}
-		if !bytes.Equal(zipFileContent, localFileContent) {
-			diff := patience.Diff(strings.Split(string(zipFileContent), "\n"), strings.Split(string(localFileContent), "\n"))
+
+		toReader, err := toFile.Open()
+		if err != nil {
+			return fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, toLabel, err)
+		}
+		toContent, err := io.ReadAll(toReader)
+		toReader.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, toLabel, err)
+		}
+
+		if !bytes.Equal(fromContent, toContent) {
+			diff := patience.Diff(strings.Split(string(fromContent), "\n"), strings.Split(string(toContent), "\n"))
 			unidiff := patience.UnifiedDiffTextWithOptions(
 				diff,
 				patience.UnifiedDiffOptions{
 					Precontext:  1,
 					Postcontext: 1,
-					SrcHeader:   fmt.Sprintf("%s (remote)", file),
-					DstHeader:   fmt.Sprintf("%s (local)", file),
+					SrcHeader:   fmt.Sprintf("%s (%s)", fileName, fromLabel),
+					DstHeader:   fmt.Sprintf("%s (%s)", fileName, toLabel),
 				},
 			)
 			fmt.Print(unidiff)
@@ -339,17 +424,69 @@ func pushAll(environNames []string) error {
 	return nil
 }
 
-func diffAll(environNames []string) error {
+func diffAll(environNames []string, from, to string) error {
 	for _, environName := range environNames {
 		environ, ok := environs[environName]
 		if !ok {
 			return envNotFound(environName)
 		}
-		if err := diff(environ); err != nil {
+
+		if err := diffEnviron(environ, from, to); err != nil {
 			return fmt.Errorf("failed to diff %s: %w", environName, err)
 		}
 	}
 	return nil
+}
+
+// diffEnviron performs diff for a single environment with the given from/to parameters
+func diffEnviron(environ Environ, from, to string) error {
+	// Resolve from parameter (default to ref file content)
+	fromSource := from
+	if fromSource == "" {
+		ref, err := readRefFile(environ.Ref)
+		if err != nil {
+			return err
+		}
+		fromSource = ref
+	}
+
+	// Get ZIP data for comparison
+	fromZipData, fromID, err := getZipFromSource(environ, fromSource)
+	if err != nil {
+		return fmt.Errorf("failed to get 'from' source: %w", err)
+	}
+
+	var toZipData []byte
+	var toLabel string
+
+	if to == "" {
+		// Compare with current directory when no -to flag specified
+		toZipData, err = getLocalZipData(environ)
+		if err != nil {
+			return err
+		}
+		// Generate archive ID for local data to use as label
+		toLabel = generateArchiveID(toZipData) + " (local)"
+	} else {
+		// Compare with another ref
+		var toID string
+		toZipData, toID, err = getZipFromSource(environ, to)
+		if err != nil {
+			return fmt.Errorf("failed to get 'to' source: %w", err)
+		}
+		toLabel = toID
+	}
+
+	// Use first 12 chars of archive IDs for brevity in diff output
+	fromLabel := fromID
+	if len(fromLabel) > 12 {
+		fromLabel = fromLabel[:12]
+	}
+	if len(toLabel) > 12 && !strings.HasSuffix(toLabel, " (local)") {
+		toLabel = toLabel[:12]
+	}
+
+	return diffZips(fromZipData, toZipData, fromLabel, toLabel)
 }
 
 func printAvailableEnvirons() {
@@ -396,27 +533,57 @@ func main() {
 
 	if len(os.Args) < 2 {
 		fmt.Printf("Usage: %s pull|push|diff [environ ...]\n", os.Args[0])
+		fmt.Printf("       %s diff [-from ref] [-to ref] [environ ...]\n", os.Args[0])
+		fmt.Printf("       (-from defaults to the contents of the ref file; -to defaults to the checked out file)\n")
 		printAvailableEnvirons()
 		os.Exit(0)
 	}
 
-	environNames := []string{}
-	if len(os.Args) > 2 {
-		environNames = os.Args[2:]
+	cmd := os.Args[1]
+
+	// Parse arguments based on command
+	var environNames []string
+	var from, to string
+
+	if cmd == "diff" {
+		// diff command supports optional -from and -to flags
+		diffFlags := flag.NewFlagSet("diff", flag.ContinueOnError)
+		diffFlags.StringVar(&from, "from", "", "source ref (archive ID or ref file)")
+		diffFlags.StringVar(&to, "to", "", "target ref (archive ID or ref file)")
+
+		// Parse flags
+		err := diffFlags.Parse(os.Args[2:])
+		if err != nil {
+			fmt.Printf("Usage: %s diff [-from ref] [-to ref] [environ ...]\n", os.Args[0])
+			os.Exit(1)
+		}
+
+		// Remaining args after flags are environ names
+		environNames = diffFlags.Args()
+		if len(environNames) == 0 {
+			// Default to all environments
+			for name := range environs {
+				environNames = append(environNames, name)
+			}
+		}
 	} else {
-		for name := range environs {
-			environNames = append(environNames, name)
+		// For pull/push commands, all args after command are environ names
+		if len(os.Args) > 2 {
+			environNames = os.Args[2:]
+		} else {
+			for name := range environs {
+				environNames = append(environNames, name)
+			}
 		}
 	}
 
-	cmd := os.Args[1]
 	switch cmd {
 	case "pull":
 		err = pullAll(environNames)
 	case "push":
 		err = pushAll(environNames)
 	case "diff":
-		err = diffAll(environNames)
+		err = diffAll(environNames, from, to)
 	default:
 		log.Printf("%s is not a valid command", cmd)
 		os.Exit(1)
