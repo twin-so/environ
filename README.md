@@ -1,31 +1,31 @@
-# environ: manage secrets in git checkouts
+# Environ: secrets out the repo, yet versioned
+Environ is a minimalist tool designed for developers who need an efficient and maintainable way to manage secrets and configuration files within Git workflows—without compromising security or introducing complex overhead.
 
-## Design principles
+## Why Environ?
 
-- Secrets are stored in Google Cloud Storage and/or Amazon S3 as content-addressed ZIP files.
-- A reference to the secrets corresponding to a given commit is stored in that commit.
-- Configuration is done in [Starlark](https://starlark-lang.org/). See [how we use it as of 2025-07-06](example/environ.star) and [test cases](tests/environ.star).
+### The problem
+- You want to keep .env files or sensitive configuration in your repo.
+- You know storing secrets in plaintext is risky.
+- You’re tired of heavyweight solutions and complex setups.
 
-## Execution
+### The solution
+- Indirection-based storage: Secrets live safely encrypted in your cloud bucket (e.g., AWS S3).
+- Git-native integration: Store a simple version reference in your repo instead of plaintext secrets.
+- Automated updates: Changes are seamlessly synchronized whenever you update the reference.
 
-Finds `environ.star` in ancestors of the working directory and executes there.
+## How does it work?
+1. Store secrets encrypted in your cloud bucket.
+2. Define references in a lightweight file within your repo.
+3. Environ CLI hooks into Git, automatically fetching the right secrets whenever references change.
 
-### `environ pull [environ…]`
+## Simple by design
+- Minimal overhead. Less reinventing the wheel, more smart integration.
+- Seamless developer experience. Less complexity, more productivity.
+- Secure from the start. Less risk, more peace of mind.
 
-Reads the secrets reference(s), pulls the secrets from the remote(s), and installs them in the working directory.
+## Contribute & Feedback
+Want to improve Environ? Open an issue, send a PR, or just reach out—we love hearing from fellow devs.
 
-Designed to run in [a `post-checkout` Git hook](example/post-checkout) or invoked manually.
-
-### `environ push [environ…]`
-
-Reads the secrets from the working directory, writes an archive to each environ's remote, and updates its reference file.
-
-The reference files are ready to be committed.
-
-### `environ diff [-from …] [-to …] [environ…]`
-
-Reads the secrets from the working directory unless `-to` specifies otherwise, the secrets from the remote based on the current reference unless `-from` specifies otherwise, and outputs the difference.
-
-# Similar projects
-
-- [Keepass-2-file](https://github.com/Dracks/keepass-2-file): Build .env or any other plain text config file pulling the secrets from a keepass file
+----
+Built by the team at [Twin](https://twin.so). We build reliable and scalable autonomous agents for fintech.
+We’re hiring! Check out our [careers page](https://twin.so/careers).
