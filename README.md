@@ -23,6 +23,23 @@ Environ is a minimalist tool designed for developers who need an efficient and m
 - Seamless developer experience. Less complexity, more productivity.
 - Secure from the start. Less risk, more peace of mind.
 
+## Execution
+Finds `environ.star` in ancestors of the working directory and executes there.
+
+### `environ pull`
+Reads the secrets reference, pulls the secrets from the remote, and installs them in the working directory.
+Designed to run in [a `post-checkout` Git hook](example/post-checkout) or invoked manually.
+
+### `environ push`
+Reads the secrets from the working directory, writes an archive to the remote, and updates the reference.
+The reference file is ready to be committed.
+
+### `environ diff`
+Reads the secrets from the working directory, the secrets from the remote based on the current reference, and outputs the difference.
+
+## Similar projects
+* [Keepass-2-file](https://github.com/Dracks/keepass-2-file): Build .env or any other plain text config file pulling the secrets from a keepass file
+
 ## Contribute & Feedback
 Want to improve Environ? Open an issue, send a PR, or just reach out—we love hearing from fellow devs.
 
