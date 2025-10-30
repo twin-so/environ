@@ -306,16 +306,48 @@ func getLocalZipData(environ Environ) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) error {
+func getLocalZipDataForDiff(environ Environ) ([]byte, []string, error) {
+	var buf bytes.Buffer
+	zipWriter := zip.NewWriter(&buf)
+	var missing []string
+
+	for _, file := range environ.Files {
+		fileContent, err := os.ReadFile(file)
+		if err != nil {
+			if os.IsNotExist(err) {
+				missing = append(missing, file)
+				continue
+			}
+			return nil, nil, fmt.Errorf("failed to read %q: %w", file, err)
+		}
+
+		fileWriter, err := zipWriter.Create(file)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create ZIP entry for %q: %w", file, err)
+		}
+
+		if _, err := fileWriter.Write(fileContent); err != nil {
+			return nil, nil, fmt.Errorf("failed to write %q to ZIP: %w", file, err)
+		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return nil, nil, fmt.Errorf("failed to finalize ZIP: %w", err)
+	}
+
+	return buf.Bytes(), missing, nil
+}
+
+func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) (bool, error) {
 	// Create ZIP readers
 	fromZipReader, err := zip.NewReader(bytes.NewReader(fromZipData), int64(len(fromZipData)))
 	if err != nil {
-		return fmt.Errorf("failed to read 'from' ZIP: %w", err)
+		return false, fmt.Errorf("failed to read 'from' ZIP: %w", err)
 	}
 
 	toZipReader, err := zip.NewReader(bytes.NewReader(toZipData), int64(len(toZipData)))
 	if err != nil {
-		return fmt.Errorf("failed to read 'to' ZIP: %w", err)
+		return false, fmt.Errorf("failed to read 'to' ZIP: %w", err)
 	}
 
 	// Build file maps
@@ -346,38 +378,41 @@ func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) error {
 	sort.Strings(fileList)
 
 	// Diff each file
+	hasDiff := false
 	for _, fileName := range fileList {
 		fromFile, fromExists := fromFiles[fileName]
 		toFile, toExists := toFiles[fileName]
 
 		if !fromExists && toExists {
 			fmt.Printf("!!! file %s only in %s\n", fileName, toLabel)
+			hasDiff = true
 			continue
 		}
 		if fromExists && !toExists {
 			fmt.Printf("!!! file %s only in %s\n", fileName, fromLabel)
+			hasDiff = true
 			continue
 		}
 
 		// Both exist, compare contents
 		fromReader, err := fromFile.Open()
 		if err != nil {
-			return fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, fromLabel, err)
+			return false, fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, fromLabel, err)
 		}
 		fromContent, err := io.ReadAll(fromReader)
 		fromReader.Close()
 		if err != nil {
-			return fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, fromLabel, err)
+			return false, fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, fromLabel, err)
 		}
 
 		toReader, err := toFile.Open()
 		if err != nil {
-			return fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, toLabel, err)
+			return false, fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, toLabel, err)
 		}
 		toContent, err := io.ReadAll(toReader)
 		toReader.Close()
 		if err != nil {
-			return fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, toLabel, err)
+			return false, fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, toLabel, err)
 		}
 
 		if !bytes.Equal(fromContent, toContent) {
@@ -392,10 +427,11 @@ func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) error {
 				},
 			)
 			fmt.Print(unidiff)
+			hasDiff = true
 		}
 	}
 
-	return nil
+	return hasDiff, nil
 }
 
 func pullAll(environNames []string) error {
@@ -424,28 +460,33 @@ func pushAll(environNames []string) error {
 	return nil
 }
 
-func diffAll(environNames []string, from, to string) error {
+func diffAll(environNames []string, from, to string) (bool, error) {
+	var anyDiff bool
 	for _, environName := range environNames {
 		environ, ok := environs[environName]
 		if !ok {
-			return envNotFound(environName)
+			return anyDiff, envNotFound(environName)
 		}
 
-		if err := diffEnviron(environ, from, to); err != nil {
-			return fmt.Errorf("failed to diff %s: %w", environName, err)
+		changed, err := diffEnviron(environ, from, to)
+		if err != nil {
+			return anyDiff, fmt.Errorf("failed to diff %s: %w", environName, err)
+		}
+		if changed {
+			anyDiff = true
 		}
 	}
-	return nil
+	return anyDiff, nil
 }
 
-// diffEnviron performs diff for a single environment with the given from/to parameters
-func diffEnviron(environ Environ, from, to string) error {
+// diffEnviron performs diff for a single environment with the given from/to parameters and reports if differences were found.
+func diffEnviron(environ Environ, from, to string) (bool, error) {
 	// Resolve from parameter (default to ref file content)
 	fromSource := from
 	if fromSource == "" {
 		ref, err := readRefFile(environ.Ref)
 		if err != nil {
-			return err
+			return false, err
 		}
 		fromSource = ref
 	}
@@ -453,17 +494,25 @@ func diffEnviron(environ Environ, from, to string) error {
 	// Get ZIP data for comparison
 	fromZipData, fromID, err := getZipFromSource(environ, fromSource)
 	if err != nil {
-		return fmt.Errorf("failed to get 'from' source: %w", err)
+		return false, fmt.Errorf("failed to get 'from' source: %w", err)
 	}
 
 	var toZipData []byte
 	var toLabel string
+	hasDiff := false
 
 	if to == "" {
 		// Compare with current directory when no -to flag specified
-		toZipData, err = getLocalZipData(environ)
+		var missing []string
+		toZipData, missing, err = getLocalZipDataForDiff(environ)
 		if err != nil {
-			return err
+			return false, err
+		}
+		for _, file := range missing {
+			fmt.Printf("!!! tracked file %s missing locally; treating as absent in diff target\n", file)
+		}
+		if len(missing) > 0 {
+			hasDiff = true
 		}
 		// Generate archive ID for local data to use as label
 		toLabel = generateArchiveID(toZipData) + " (local)"
@@ -472,7 +521,7 @@ func diffEnviron(environ Environ, from, to string) error {
 		var toID string
 		toZipData, toID, err = getZipFromSource(environ, to)
 		if err != nil {
-			return fmt.Errorf("failed to get 'to' source: %w", err)
+			return false, fmt.Errorf("failed to get 'to' source: %w", err)
 		}
 		toLabel = toID
 	}
@@ -486,7 +535,11 @@ func diffEnviron(environ Environ, from, to string) error {
 		toLabel = toLabel[:12]
 	}
 
-	return diffZips(fromZipData, toZipData, fromLabel, toLabel)
+	diffFound, err := diffZips(fromZipData, toZipData, fromLabel, toLabel)
+	if err != nil {
+		return false, err
+	}
+	return hasDiff || diffFound, nil
 }
 
 func printAvailableEnvirons() {
@@ -544,6 +597,7 @@ func main() {
 	// Parse arguments based on command
 	var environNames []string
 	var from, to string
+	var diffChanged bool
 
 	if cmd == "diff" {
 		// diff command supports optional -from and -to flags
@@ -583,7 +637,7 @@ func main() {
 	case "push":
 		err = pushAll(environNames)
 	case "diff":
-		err = diffAll(environNames, from, to)
+		diffChanged, err = diffAll(environNames, from, to)
 	default:
 		log.Printf("%s is not a valid command", cmd)
 		os.Exit(1)
@@ -594,6 +648,9 @@ func main() {
 		if errors.As(err, &envNotFound) {
 			printAvailableEnvirons()
 		}
+		os.Exit(1)
+	}
+	if cmd == "diff" && diffChanged {
 		os.Exit(1)
 	}
 }
