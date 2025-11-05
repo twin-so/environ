@@ -338,6 +338,49 @@ func getLocalZipDataForDiff(environ Environ) ([]byte, []string, error) {
 	return buf.Bytes(), missing, nil
 }
 
+func readZipFileContent(file *zip.File) ([]byte, error) {
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
+}
+
+func splitLines(content []byte) []string {
+	if len(content) == 0 {
+		return nil
+	}
+	lines := strings.Split(string(content), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+func diffRange(length int) string {
+	if length == 0 {
+		return "0,0"
+	}
+	return fmt.Sprintf("1,%d", length)
+}
+
+func printSingleSidedDiff(fileName, fromLabel, toLabel string, fromContent, toContent []byte) {
+	fromLines := splitLines(fromContent)
+	toLines := splitLines(toContent)
+
+	fmt.Printf("--- %s (%s)\n", fileName, fromLabel)
+	fmt.Printf("+++ %s (%s)\n", fileName, toLabel)
+	fmt.Printf("@@ -%s +%s @@\n", diffRange(len(fromLines)), diffRange(len(toLines)))
+
+	for _, line := range fromLines {
+		fmt.Printf("-%s\n", line)
+	}
+	for _, line := range toLines {
+		fmt.Printf("+%s\n", line)
+	}
+}
+
 func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) (bool, error) {
 	// Create ZIP readers
 	fromZipReader, err := zip.NewReader(bytes.NewReader(fromZipData), int64(len(fromZipData)))
@@ -385,32 +428,32 @@ func diffZips(fromZipData, toZipData []byte, fromLabel, toLabel string) (bool, e
 
 		if !fromExists && toExists {
 			fmt.Printf("!!! file %s only in %s\n", fileName, toLabel)
+			content, err := readZipFileContent(toFile)
+			if err != nil {
+				return false, fmt.Errorf("failed to read %s from %s ZIP: %w", fileName, toLabel, err)
+			}
+			printSingleSidedDiff(fileName, fromLabel, toLabel, nil, content)
 			hasDiff = true
 			continue
 		}
 		if fromExists && !toExists {
 			fmt.Printf("!!! file %s only in %s\n", fileName, fromLabel)
+			content, err := readZipFileContent(fromFile)
+			if err != nil {
+				return false, fmt.Errorf("failed to read %s from %s ZIP: %w", fileName, fromLabel, err)
+			}
+			printSingleSidedDiff(fileName, fromLabel, toLabel, content, nil)
 			hasDiff = true
 			continue
 		}
 
 		// Both exist, compare contents
-		fromReader, err := fromFile.Open()
-		if err != nil {
-			return false, fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, fromLabel, err)
-		}
-		fromContent, err := io.ReadAll(fromReader)
-		fromReader.Close()
+		fromContent, err := readZipFileContent(fromFile)
 		if err != nil {
 			return false, fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, fromLabel, err)
 		}
 
-		toReader, err := toFile.Open()
-		if err != nil {
-			return false, fmt.Errorf("failed to open file %s in %s ZIP: %w", fileName, toLabel, err)
-		}
-		toContent, err := io.ReadAll(toReader)
-		toReader.Close()
+		toContent, err := readZipFileContent(toFile)
 		if err != nil {
 			return false, fmt.Errorf("failed to read file %s in %s ZIP: %w", fileName, toLabel, err)
 		}
