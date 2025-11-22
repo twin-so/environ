@@ -617,6 +617,7 @@ func main() {
 	globals := starlark.StringDict{
 		"gcs":     starlark.NewBuiltin("gcs", gcsfunc),
 		"s3":      starlark.NewBuiltin("s3", s3func),
+		"fs":      starlark.NewBuiltin("fs", fsfunc),
 		"local":   starlark.NewBuiltin("local", local),
 		"cache":   starlark.NewBuiltin("cache", cache),
 		"environ": starlark.NewBuiltin("environ", environ),
